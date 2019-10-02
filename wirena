@@ -1,0 +1,325 @@
+#!/bin/sh
+# a nerd tool for the geek world \
+exec tclsh "$0" "$@"
+
+# a command launcher
+
+package require Tcl 8.4
+package require Tk 8.4
+#package require BLT
+
+namespace eval ::myHistory {
+	namespace export init add event
+	variable count [expr [::history nextid] - 1]
+	variable curr $count
+
+	proc init { {param ""} } {
+		variable count
+		variable curr
+		#::history clear
+		::history keep 30
+		set count [set curr 0]
+	}
+	proc add { str } {
+		variable count
+		variable curr
+
+		if { "[::history event $count]" != "$str"} {
+			::history add "$str"
+			set curr [incr count]
+		}
+	}
+	proc event { ref } {
+		variable count
+		variable curr
+
+		set cok [expr $curr + $ref]
+		if {$cok <= $count && $cok >= 0} {
+			set curr $cok
+			return [::history event $curr]
+		}
+	}
+}
+
+# addons..
+namespace eval ::macro {
+	variable controlFlag
+
+	proc MACROlist {} {
+		tk_messageBox -message [string map {{ } "\n"} [info procs MACRO*]]
+	}
+	proc MACROcat name {
+		tk_messageBox -message [info body MACRO$name]
+	}
+	proc MACROkill names {
+		foreach name "$names" {
+			rename MACRO$name ""
+		}
+	}
+	proc MACROedit macro {
+		if [catch { set head "$macro {[info args ::macro::MACRO$macro]}" }] {
+			set head $macro
+			set body {}
+		} else {
+			set body "{[info body ::macro::MACRO$macro]}"
+		}
+		set newBody [::macro::EmEdit "$head $body" "edit $macro" null 540 370]
+		eval proc ::macro::MACRO$newBody
+	}
+
+	proc create { macro } {
+		namespace eval ::macro proc ::macro::MACRO$macro
+	}
+	proc EmEdit { str title placement width height } {
+		variable controlFlag
+
+		if { "$placement" == "null" } {
+			# must be behind the wirena
+			#set placement "+0-0" / [wm geometry .]
+			set placement 540x370
+			set width 64
+			set height 20
+		}
+		toplevel .macro
+		wm title .macro $title
+		wm geometry .macro $placement
+		text .macro.t1 -width $width -height $height
+		pack .macro.t1 -expand 1 -fill both
+
+		.macro.t1 insert end [string range "$str" 0 end]
+		set str {}
+		focus -force .macro.t1
+		update
+
+		set ::controlFlag false
+
+		bind .macro <ResizeRequest> {
+			#.macro.t1 configure -height [.macro cget -height] -width [.macro cget -width]
+			#bind .macro <Configure> {}
+			#puts "%T %P %W %X %Y %h %w"
+			#puts "[.macro.t1 cget -width] [.macro.t1 cget -height]"
+			if { "%W" == ".macro" } {
+				set new_height [expr %h / 4 ]
+				set new_width [expr %w / 20 ]
+				set new_height [expr int ($new_height)]
+				set new_width [expr int ($new_width)]
+				.macro.t1 configure -height $new_height -width $new_width
+			}
+			after 5000
+		}
+		bind .macro.t1 <KeyPress> {
+			if { "%s" == "4" } {
+				set ::controlFlag true
+			}
+			if { "%K" == "Return" && "$::controlFlag" == "true" } {
+				set ::retVal [.macro.t1 get 0.0 end]
+			}
+		}
+		bind .macro.t1 <KeyRelease> {
+			if { "%K" == "Return" && "$::controlFlag" == "true" } {
+				destroy .macro
+			}
+			if { "%s" == "4" } {
+				set ::controlFlag false
+			}
+		}
+		vwait ::retVal
+		return $::retVal
+	}
+}
+
+namespace eval ::UI {
+	variable e1
+
+	proc Chooser { key str } {
+		variable e1
+		upvar 1 olde1 oldcmd
+		switch "$key" {
+			Up {
+				set e1 [::myHistory::event -1]
+				return
+			}
+			Down {
+				#::myHistory::add "$e1"
+				set ah [::myHistory::event +1]
+				if { $ah != {} } {
+					set e1 "$ah"
+				}
+				#set e1 $oldcmd
+				return
+			}
+		}
+		if { "$str" == "" } {
+			return
+		}
+		if { "$key" == "Return" } {
+			switch -regexp -- $str {
+				Q_$ {
+			# builtin
+					destroy .
+					exit 0
+				}
+				QR_$ {
+					set ::ahahah "it's true."
+				}
+				L_$ {
+					#exec killall X
+					exec FvwmCommand Quit
+				}
+				H_$ {
+					after 1000
+					exec /sbin/shutdown -h now &
+				}
+				R_$ {
+					after 1000
+					exec /sbin/shutdown -r now &
+				}
+				S_$ {
+					exec sync
+					after 100
+					exec /usr/sbin/pm-hibernate
+					exec sync
+				}
+				~K$ {
+					exec xkill
+				}
+				~W$ {
+					exec xwininfo | tail -n +5 | xmessage -file - &
+				}
+				~S$ {
+					exec FvwmCommand stick &
+				}
+				^!\[a-zA-Z] {
+					eval exec [string range $str 1 end] &
+				}
+				^!!\[a-zA-Z]+ {
+					eval exec setsid xterm -T [string range [lindex $str 0] 2 end] -e [string range $str 1 end] &
+				}
+				^H[0-9]+ {
+					set e1 [::history event [string range $str 1 end]]
+					return
+				}
+				^% {
+					set toto [eval [string range $str 1 end]]
+					focus -force .e1
+					if { $toto != {} } {
+						tk_messageBox -title "TclEval" -message $toto
+					}
+				}
+				^P-[a-z]+$ {
+					source ${::HOME}/bin/wirena-[set plug [lindex [string map {- { }} $str] end]]
+				}
+				^U-[a-z]+$ {
+					set widget [lindex [string map {- { }} $str] end]
+					destroy .$widget
+					namespace forget ::$widget
+				}
+				^M.+ {
+					# add a macro, the following has to be tcl ;)
+					set proqu [string range $str 1 end]
+					if [catch { eval proc ::macro::MACRO$proqu } err] {
+						if { "$err" == "missing close-brace" } {
+							#eval proc MACRO[EmEdit "$proqu" "wirena" -2+23 64 22]
+							::macro::create [::macro::EmEdit "$proqu" "wirena" -2+23 64 22]
+						} else {
+							tk_messageBox -title "Wirena error?" -message "$err"
+						}
+					}
+					# info complete $line
+				}
+				^:.* {
+				# invoke macro
+					# ^<name> <arg>
+					eval ::macro::MACRO[string range $str 1 end]
+				}
+				^\[0-9]+:\[0-9]+@.+ {
+					set b [split $str {@}]
+					set when [clock scan [lindex $b 0]]
+					set now [clock seconds]
+					set mseconds [expr ( $when - $now ) * 1000 ]
+					set str {*}[lrange $b 1 end]
+					after $mseconds {
+						eval set str "[lrange $b 1 end]"
+						set ::UI::e1 [join [lrange $b 1 end]]
+						after 200
+						event generate .e1 <KeyPress> -keysum "Return"
+					}
+				}
+				default {
+				# usefull default 
+					after 200
+					exec xwit -name "$str" -select &
+				}
+			}
+			::myHistory::add "$str"
+		} elseif { "%K" == "Tab" } {
+			# need  help!
+		}
+	}
+
+	proc init {} {
+		tk appname wirena
+		wm title . wirena
+		entry .e1 -textvariable ::UI::e1 -width 32 -relief flat
+		pack .e1 -expand 1 -fill both
+		focus -force .e1
+		bind .e1 <KeyPress> {
+			::UI::Chooser "%K" "$::UI::e1"
+		}
+		bind .e1 <Button-5> {
+			set ::UI::e1 [::myHistory::event -1]
+		}
+		bind .e1 <Button-4> {
+			set ah [::myHistory::event +1]
+			if { $ah != {} } {
+				set ::UI::e1 "$ah"
+			}
+		}
+		bind .e1 <Button-3> {
+			::UI::Chooser Return $::UI::e1
+		}
+	}
+
+}
+
+# outside namespace, yes
+proc rightrights filename {
+	if ![file exists $filename] {
+		return 0
+	}
+	if { "[set ftype [file type $filename]]" == "link" } {
+		set filename [file readlink $filename]
+	}
+	if { "$ftype" != "file" } {
+		return 0
+	}
+	if ![file owned $filename] {
+		return 0
+	}
+	return 1
+}
+
+variable olde1 {}
+variable ::HOME {/home/eak}
+catch { set ::HOME $env(HOME) }
+# the first window
+::UI::init
+::myHistory::init
+if [rightrights [set a "${::HOME}/.wirena"]] {
+	# use interp !$!$%@!
+	catch { source $a
+	::macro::init } out
+}
+
+vwait ::ahahah
+# 'til reload
+
+destroy .macro
+bind .e1 <KeyPress> {}
+destroy .e1
+namespace forget ::myHistory
+namespace forget ::macro
+namespace forget ::UI
+unset ::ahahah
+source $::HOME/bin/wirena
+
